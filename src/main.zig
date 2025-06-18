@@ -6,26 +6,24 @@ const cf = @cImport({
     @cInclude("CoreGraphics/CoreGraphics.h");
 });
 
-const hotkey = hotkeys.hotkey;
-const binding = hotkeys.binding;
+const Key = hotkeys.Key;
+const Binding = hotkeys.Binding;
+const Chord = hotkeys.Chord;
+const Command = hotkeys.Command;
 
 fn eventTapCallback(_: cf.CGEventTapProxy, kind: cf.CGEventType, event: cf.CGEventRef, ref: ?*anyopaque) callconv(.c) cf.CGEventRef {
-    const arr = @as(*std.ArrayList(binding), @ptrCast(@alignCast(ref.?)));
+    const arr = @as(*std.ArrayList(Binding), @ptrCast(@alignCast(ref.?)));
+    const currKey = Key{
+        .code = @intCast(cf.CGEventGetIntegerValueField(event, cf.kCGKeyboardEventKeycode)),
+        .flags = @intCast(cf.CGEventGetFlags(event)),
+    };
 
-    const flags = cf.CGEventGetFlags(event);
-    const keyCode = cf.CGEventGetIntegerValueField(event, cf.kCGKeyboardEventKeycode);
-    std.debug.print("INPUT {d} {x}\n", .{ keyCode, flags });
+    std.debug.print("INPUT {} \n", .{currKey});
     switch (kind) {
         cf.kCGEventKeyDown, cf.kCGEventFlagsChanged => {
             for (arr.items) |b| {
-                if (b.in.key == keyCode and b.in.flags == flags) {
-                    for (b.out) |item| {
-                        const key = cf.CGEventCreateKeyboardEvent(null, @as(u16, @intCast(item.key)), true);
-                        cf.CGEventSetFlags(key, @as(u64, @intCast(item.flags)));
-                        cf.CGEventPost(cf.kCGHIDEventTap, key);
-                        cf.CFRelease(key);
-                    }
-
+                if (b.isEqual(currKey)) {
+                    b.apply();
                     return null;
                 }
             }
@@ -52,19 +50,25 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const alloc = gpa.allocator();
-    var hks = std.ArrayList(binding).init(alloc);
-    defer hks.deinit();
+    var bindings = std.ArrayList(Binding).init(alloc);
+    defer bindings.deinit();
 
-    try hks.append(.{
-        .in = .{ .key = 0, .flags = 0x80140 },
-        .out = &.{
-            .{ .key = 33, .flags = 0x100 },
-            .{ .key = 0, .flags = 0x100 },
+    try bindings.append(.{ .command = Command{
+        .in = .{ .code = 1, .flags = 0x100 },
+        .command = &[_][]const u8{ "touch", "file.txt" },
+    } });
+
+    try bindings.append(.{ .chord = Chord{
+        .in = .{ .code = 0, .flags = 0x100 },
+        .out = &[_]Key{
+            .{ .code = 0, .flags = 0x100 },
+            .{ .code = 0, .flags = 0x100 },
+            .{ .code = 0, .flags = 0x100 },
         },
-    });
+    } });
 
     const eventMask: cf.CGEventMask = cf.CGEventMaskBit(cf.kCGEventKeyDown) | cf.CGEventMaskBit(cf.kCGEventFlagsChanged);
-    const eventTap = cf.CGEventTapCreate(cf.kCGSessionEventTap, cf.kCGHeadInsertEventTap, cf.kCGEventTapOptionDefault, eventMask, eventTapCallback, &hks);
+    const eventTap = cf.CGEventTapCreate(cf.kCGSessionEventTap, cf.kCGHeadInsertEventTap, cf.kCGEventTapOptionDefault, eventMask, eventTapCallback, &bindings);
     if (eventTap == null) {
         std.debug.print("Failed to create eventTap!\n", .{});
         return CFErrors.FailedToCreateEventTap;
